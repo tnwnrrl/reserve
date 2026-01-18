@@ -5,6 +5,7 @@ Professional measurement equipment aesthetic with full styling control
 
 import sys
 import os
+import tempfile
 import numpy as np
 import threading
 import pygame
@@ -16,6 +17,7 @@ from PyQt5.QtGui import QFont, QPalette, QColor
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib import patches
+from scipy import signal
 from audio_processor import AudioProcessor
 
 
@@ -49,7 +51,13 @@ class OscilloscopeApp(QMainWindow):
         # Animation timer
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.update_animation)
-        self.animation_timer.setInterval(50)  # Update every 50ms
+        self.animation_timer.setInterval(100)  # Update every 100ms (10fps)
+
+        # Blitting cache for animation performance
+        self._waveform_background = None
+        self._waveform_line = None
+        self._waveform_marker = None
+        self._cached_samples = None
 
         self.init_ui()
         self.apply_stylesheet()
@@ -527,10 +535,24 @@ class OscilloscopeApp(QMainWindow):
                 self.draw_waveform()
                 self.draw_spectrum()
 
-            except Exception as e:
-                self.update_status(f"ERROR: {str(e)}", '#ff0000')
-                self.file_label.setText("LOAD FAILED")
+            except FileNotFoundError:
+                self.update_status("ERROR: FILE NOT FOUND", '#ff0000')
+                self.file_label.setText("FILE NOT FOUND")
                 self.file_label.setStyleSheet('color: #ff0000;')
+            except Exception as e:
+                error_msg = str(e)
+                # ffmpeg 관련 에러 체크
+                if 'ffmpeg' in error_msg.lower() or 'ffprobe' in error_msg.lower():
+                    self.update_status("ERROR: FFMPEG NOT FOUND", '#ff0000')
+                    self.file_label.setText("INSTALL FFMPEG")
+                elif 'codec' in error_msg.lower() or 'decode' in error_msg.lower():
+                    self.update_status("ERROR: UNSUPPORTED CODEC", '#ff0000')
+                    self.file_label.setText("CODEC ERROR")
+                else:
+                    self.update_status(f"ERROR: {error_msg[:30]}", '#ff0000')
+                    self.file_label.setText("LOAD FAILED")
+                self.file_label.setStyleSheet('color: #ff0000;')
+                print(f"Load error details: {e}")  # Console debug
 
     def reverse_audio(self):
         """Reverse audio"""
@@ -560,6 +582,9 @@ class OscilloscopeApp(QMainWindow):
         self.reverse_status.setText('● REVERSED')
         self.reverse_status.setStyleSheet('color: #00ff41;')
         self.update_status("SIGNAL REVERSED")
+        # Invalidate animation cache (audio data changed)
+        self._waveform_background = None
+        self._cached_samples = None
         self.draw_waveform()
         self.draw_spectrum()
 
@@ -580,10 +605,9 @@ class OscilloscopeApp(QMainWindow):
                 if self.temp_audio_file:
                     try:
                         os.remove(self.temp_audio_file)
-                    except:
-                        pass
+                    except OSError:
+                        pass  # File already deleted or in use
 
-                import tempfile
                 temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
                 self.temp_audio_file = temp_file.name
                 temp_file.close()
@@ -616,6 +640,9 @@ class OscilloscopeApp(QMainWindow):
         self.is_paused = False
         self.animation_timer.stop()
         self.playback_position = 0
+        # Invalidate animation cache
+        self._waveform_background = None
+        self._cached_samples = None
         self.draw_waveform()
         self.draw_spectrum()
         self.update_status("STOPPED", '#ff0000')
@@ -641,7 +668,7 @@ class OscilloscopeApp(QMainWindow):
 
         # Just increment position for visual effect
         duration_ms = self.processor.duration_ms if self.processor.duration_ms else 1000
-        self.playback_position += 50  # Move by 50ms each update
+        self.playback_position += 100  # Move by 100ms each update
 
         if self.playback_position >= duration_ms:
             self.playback_position = 0  # Loop back
@@ -696,10 +723,8 @@ class OscilloscopeApp(QMainWindow):
         duration_ms = self.processor.duration_ms
         time_ms = np.linspace(0, duration_ms, len(samples))
 
-        # Glow effect
-        self.waveform_canvas.axes.plot(time_ms, samples, color='#00ff41', linewidth=4, alpha=0.3)
-        self.waveform_canvas.axes.plot(time_ms, samples, color='#00ff41', linewidth=2, alpha=0.6)
-        self.waveform_canvas.axes.plot(time_ms, samples, color='#00ff41', linewidth=1, alpha=1.0)
+        # Single line (optimized from 3-layer glow)
+        self.waveform_canvas.axes.plot(time_ms, samples, color='#00ff41', linewidth=1.5, alpha=0.9)
 
         self.waveform_canvas.axes.set_xlim(0, duration_ms)
         self.waveform_canvas.axes.set_ylim(-1.2, 1.2)
@@ -729,17 +754,13 @@ class OscilloscopeApp(QMainWindow):
 
         self.waveform_canvas.draw()
 
-    def draw_waveform_animated(self):
-        """Draw waveform with scrolling animation effect"""
-        self.waveform_canvas.axes.clear()
-
+    def _prepare_animation_cache(self):
+        """Prepare cached data for blitting animation"""
         audio_data = self.processor.get_audio_data()
         if audio_data is None:
-            self.style_scope_axis(self.waveform_canvas.axes, 'TIME (ms)', 'AMPLITUDE (V)')
-            self.waveform_canvas.draw()
-            return
+            return False
 
-        # Get samples
+        # Get and cache samples
         if len(audio_data.shape) > 1:
             samples = audio_data[:, 0]
         else:
@@ -751,55 +772,59 @@ class OscilloscopeApp(QMainWindow):
             step = len(samples) // display_samples
             samples = samples[::step]
 
-        # Normalize
-        samples = samples / (np.max(np.abs(samples)) + 1e-10)
+        # Normalize and cache
+        self._cached_samples = samples / (np.max(np.abs(samples)) + 1e-10)
 
+        # Setup static background
+        ax = self.waveform_canvas.axes
+        ax.clear()
+        ax.set_xlim(0, 2000)  # 2 second window
+        ax.set_ylim(-1.2, 1.2)
+        self.style_scope_axis(ax, 'TIME (ms)', 'AMPLITUDE (V)')
+        ax.axhline(y=0, color='#001a00', linewidth=1.5, alpha=0.8)
+
+        # Create empty line for animation
+        self._waveform_line, = ax.plot([], [], color='#00ff41', linewidth=1.5, alpha=0.9)
+        self._waveform_marker = ax.axvline(x=600, color='#ffff00', linewidth=2, alpha=0.5, linestyle='--')
+
+        # Draw and cache background
+        self.waveform_canvas.draw()
+        self._waveform_background = self.waveform_canvas.copy_from_bbox(ax.bbox)
+
+        return True
+
+    def draw_waveform_animated(self):
+        """Draw waveform with blitting for high performance"""
+        # Initialize cache if needed
+        if self._waveform_background is None or self._cached_samples is None:
+            if not self._prepare_animation_cache():
+                return
+
+        ax = self.waveform_canvas.axes
         duration_ms = self.processor.duration_ms
-        total_points = len(samples)
-
-        # Create scrolling window effect
-        # Show a moving window of the waveform
-        window_size_ms = 2000  # Show 2 seconds at a time
+        total_points = len(self._cached_samples)
+        window_size_ms = 2000  # 2 second window
         window_size_points = int((window_size_ms / duration_ms) * total_points)
 
-        # Calculate which part to show based on playback position
+        # Calculate window position
         start_point = int((self.playback_position / duration_ms) * total_points)
-        end_point = min(start_point + window_size_points, total_points)
-
         if start_point >= total_points:
             start_point = 0
-            end_point = window_size_points
+        end_point = min(start_point + window_size_points, total_points)
 
         # Get window samples
-        window_samples = samples[start_point:end_point]
+        window_samples = self._cached_samples[start_point:end_point]
         if len(window_samples) == 0:
-            window_samples = samples[:window_size_points]
+            window_samples = self._cached_samples[:window_size_points]
 
-        # Create time axis for window
         time_window = np.linspace(0, window_size_ms, len(window_samples))
 
-        # Draw with glow effect - scrolling from left to right
-        self.waveform_canvas.axes.plot(time_window, window_samples, color='#00ff41', linewidth=4, alpha=0.3)
-        self.waveform_canvas.axes.plot(time_window, window_samples, color='#00ff41', linewidth=2, alpha=0.6)
-        self.waveform_canvas.axes.plot(time_window, window_samples, color='#00ff41', linewidth=1, alpha=1.0)
-
-        self.waveform_canvas.axes.set_xlim(0, window_size_ms)
-        self.waveform_canvas.axes.set_ylim(-1.2, 1.2)
-        self.style_scope_axis(self.waveform_canvas.axes, 'TIME (ms)', 'AMPLITUDE (V)')
-
-        self.waveform_canvas.axes.axhline(y=0, color='#001a00', linewidth=1.5, alpha=0.8)
-
-        # Add vertical position marker at a fixed position (like oscilloscope trigger)
-        marker_pos = window_size_ms * 0.3  # Show at 30% from left
-        self.waveform_canvas.axes.axvline(
-            x=marker_pos,
-            color='#ffff00',
-            linewidth=2,
-            alpha=0.5,
-            linestyle='--'
-        )
-
-        self.waveform_canvas.draw()
+        # Restore background and update line (blitting)
+        self.waveform_canvas.restore_region(self._waveform_background)
+        self._waveform_line.set_data(time_window, window_samples)
+        ax.draw_artist(self._waveform_line)
+        ax.draw_artist(self._waveform_marker)
+        self.waveform_canvas.blit(ax.bbox)
 
     def draw_spectrum(self):
         """Draw spectrum"""
@@ -834,15 +859,12 @@ class OscilloscopeApp(QMainWindow):
         magnitude_db = 20 * np.log10(magnitude + 1e-10)
         magnitude_db = magnitude_db - np.min(magnitude_db)
 
-        from scipy import signal
         window_size = 51
         if len(magnitude_db) > window_size:
             magnitude_db = signal.savgol_filter(magnitude_db, window_size, 3)
 
-        # Glow effect
-        self.spectrum_canvas.axes.plot(positive_freqs, magnitude_db, color='#00ff41', linewidth=4, alpha=0.3)
-        self.spectrum_canvas.axes.plot(positive_freqs, magnitude_db, color='#00ff41', linewidth=2, alpha=0.6)
-        self.spectrum_canvas.axes.plot(positive_freqs, magnitude_db, color='#00ff41', linewidth=1, alpha=1.0)
+        # Single line (optimized from 3-layer glow)
+        self.spectrum_canvas.axes.plot(positive_freqs, magnitude_db, color='#00ff41', linewidth=1.5, alpha=0.9)
 
         self.spectrum_canvas.axes.fill_between(positive_freqs, magnitude_db, 0, color='#00ff41', alpha=0.2)
 
@@ -857,8 +879,8 @@ class OscilloscopeApp(QMainWindow):
         if self.temp_audio_file and os.path.exists(self.temp_audio_file):
             try:
                 os.remove(self.temp_audio_file)
-            except:
-                pass
+            except OSError:
+                pass  # File in use or permission denied
         event.accept()
 
 
