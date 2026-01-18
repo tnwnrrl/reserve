@@ -357,7 +357,6 @@ class OscilloscopeApp(QMainWindow):
                     self.update_status(f"ERROR: {error_msg[:30]}", Colors.RED)
                     self.file_label.setText("LOAD FAILED")
                 self.file_label.setStyleSheet(f'color: {Colors.RED};')
-                print(f"Load error details: {e}")  # Console debug
 
     def reverse_audio(self):
         """Reverse audio"""

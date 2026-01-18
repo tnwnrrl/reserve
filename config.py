@@ -49,7 +49,6 @@ class Fonts:
     LABEL_SIZE = 17
     VALUE_SIZE = 27
     BUTTON_SIZE = 24
-    SPEED_SIZE = 48
 
 
 # ════════════════════════════════════════════════════════════════
@@ -77,10 +76,6 @@ class Layout:
     BUTTON_HEIGHT = 48
     BUTTON_HEIGHT_SMALL = 41
 
-    # Speed display
-    SPEED_DISPLAY_HEIGHT = 71
-    SLIDER_HEIGHT = 31
-
     # Section title
     SECTION_TITLE_WIDTH = 408
     SECTION_TITLE_HEIGHT = 34
@@ -106,11 +101,6 @@ PLAYBACK_STEP_MS = 100          # Playback position increment per update
 # FFT settings
 FFT_SIZE = 16384                # FFT computation size
 SAVGOL_WINDOW = 51              # Savitzky-Golay filter window size
-
-# Speed slider settings
-SPEED_MIN = 5                   # Minimum speed (0.5x)
-SPEED_MAX = 20                  # Maximum speed (2.0x)
-SPEED_DEFAULT = 10              # Default speed (1.0x)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -204,41 +194,6 @@ def get_stylesheet():
 
     #paramValue {{
         color: {Colors.GREEN_BRIGHT};
-    }}
-
-    #speedDisplay {{
-        background-color: {Colors.BLACK};
-        border: 5px solid {Colors.BORDER};
-        border-radius: 9px;
-    }}
-
-    #speedValue {{
-        color: {Colors.GREEN_BRIGHT};
-    }}
-
-    #speedMarker {{
-        color: {Colors.GREEN_MEDIUM};
-    }}
-
-    QSlider::groove:horizontal {{
-        background: {Colors.BORDER};
-        height: 14px;
-        border-radius: 7px;
-    }}
-
-    QSlider::handle:horizontal {{
-        background: {Colors.GREEN_BRIGHT};
-        width: 34px;
-        margin: -10px 0;
-        border-radius: 17px;
-    }}
-
-    QSlider::add-page:horizontal {{
-        background: {Colors.BORDER};
-    }}
-
-    QSlider::sub-page:horizontal {{
-        background: {Colors.GREEN_BRIGHT};
     }}
 
     #channelLabel {{
