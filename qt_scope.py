@@ -6,28 +6,28 @@ Professional measurement equipment aesthetic with full styling control
 import sys
 import os
 import tempfile
-import numpy as np
 import threading
 import pygame
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QPushButton, QLabel, QSlider, QFileDialog,
-                             QFrame, QGridLayout, QSizePolicy)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QFont, QPalette, QColor
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
-from matplotlib import patches
-from scipy import signal
+                             QFrame, QGridLayout)
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QFont
+
+from config import (
+    Colors, Fonts, Layout, get_stylesheet,
+    DISPLAY_SAMPLES, WINDOW_SIZE_MS,
+    ANIMATION_INTERVAL_MS, PLAYBACK_STEP_MS,
+    FFT_SIZE, SAVGOL_WINDOW,
+    SPEED_MIN, SPEED_MAX, SPEED_DEFAULT
+)
+from visualization import (
+    MplCanvas, style_scope_axis,
+    prepare_waveform_samples, compute_spectrum,
+    draw_waveform_static, draw_spectrum_static,
+    WaveformAnimator
+)
 from audio_processor import AudioProcessor
-
-
-class MplCanvas(FigureCanvasQTAgg):
-    """Matplotlib canvas for PyQt5"""
-    def __init__(self, parent=None, width=10, height=4, dpi=100):
-        self.fig = Figure(figsize=(width, height), dpi=dpi, facecolor='#000000')
-        self.axes = self.fig.add_subplot(111)
-        self.axes.set_facecolor('#000000')
-        super(MplCanvas, self).__init__(self.fig)
 
 
 class OscilloscopeApp(QMainWindow):
@@ -51,35 +51,35 @@ class OscilloscopeApp(QMainWindow):
         # Animation timer
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.update_animation)
-        self.animation_timer.setInterval(100)  # Update every 100ms (10fps)
+        self.animation_timer.setInterval(ANIMATION_INTERVAL_MS)
 
-        # Blitting cache for animation performance
-        self._waveform_background = None
-        self._waveform_line = None
-        self._waveform_marker = None
-        self._cached_samples = None
+        # Waveform animator (initialized after UI)
+        self.waveform_animator = None
 
         self.init_ui()
         self.apply_stylesheet()
 
+        # Initialize waveform animator after canvas is created
+        self.waveform_animator = WaveformAnimator(self.waveform_canvas)
+
     def init_ui(self):
         """Initialize UI"""
         self.setWindowTitle('AUDIO SPECTRUM ANALYZER ASA-2000')
-        self.setGeometry(100, 100, 1600, 950)
+        self.setGeometry(Layout.WINDOW_X, Layout.WINDOW_Y, Layout.WINDOW_WIDTH, Layout.WINDOW_HEIGHT)
 
         # Central widget
         central = QWidget()
         self.setCentralWidget(central)
         main_layout = QVBoxLayout(central)
-        main_layout.setContentsMargins(10, 10, 10, 10)
-        main_layout.setSpacing(10)
+        main_layout.setContentsMargins(Layout.MAIN_MARGIN, Layout.MAIN_MARGIN, Layout.MAIN_MARGIN, Layout.MAIN_MARGIN)
+        main_layout.setSpacing(Layout.MAIN_SPACING)
 
         # Header
         self.create_header(main_layout)
 
         # Main content
         content_layout = QHBoxLayout()
-        content_layout.setSpacing(10)
+        content_layout.setSpacing(Layout.MAIN_SPACING)
 
         # Left panel
         self.create_control_panel(content_layout)
@@ -96,19 +96,19 @@ class OscilloscopeApp(QMainWindow):
         """Create header"""
         header = QFrame()
         header.setObjectName("header")
-        header.setFixedHeight(80)
+        header.setFixedHeight(Layout.HEADER_HEIGHT)
         header_layout = QVBoxLayout(header)
 
         title = QLabel('AUDIO SPECTRUM ANALYZER')
         title.setObjectName("title")
         title.setAlignment(Qt.AlignCenter)
-        title.setFont(QFont('Arial', 36, QFont.Bold))
+        title.setFont(QFont('Arial', 20, QFont.Bold))
         header_layout.addWidget(title)
 
         subtitle = QLabel('MODEL: ASA-2000  |  REVERSE AUDIO ANALYSIS SYSTEM')
         subtitle.setObjectName("subtitle")
         subtitle.setAlignment(Qt.AlignCenter)
-        subtitle.setFont(QFont('Courier New', 12))
+        subtitle.setFont(QFont('Courier New', 8))
         header_layout.addWidget(subtitle)
 
         layout.addWidget(header)
@@ -117,26 +117,26 @@ class OscilloscopeApp(QMainWindow):
         """Create control panel"""
         panel = QFrame()
         panel.setObjectName("controlPanel")
-        panel.setFixedWidth(420)
+        panel.setFixedWidth(Layout.CONTROL_PANEL_WIDTH)
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setSpacing(10)
+        panel_layout.setSpacing(6)
 
         # File input
         file_section = self.create_section("FILE INPUT")
         file_layout = QVBoxLayout()
-        file_layout.setContentsMargins(10, 35, 10, 10)
+        file_layout.setContentsMargins(6, 22, 6, 6)
 
         self.file_label = QLabel('NO SIGNAL')
         self.file_label.setObjectName("fileLabel")
         self.file_label.setAlignment(Qt.AlignCenter)
-        self.file_label.setFont(QFont('Courier New', 13, QFont.Bold))
+        self.file_label.setFont(QFont('Courier New', 9, QFont.Bold))
         self.file_label.setWordWrap(True)
         file_layout.addWidget(self.file_label)
 
         load_btn = QPushButton('LOAD FILE')
         load_btn.setObjectName("loadButton")
-        load_btn.setFont(QFont('Courier New', 14, QFont.Bold))
-        load_btn.setFixedHeight(45)
+        load_btn.setFont(QFont('Courier New', 10, QFont.Bold))
+        load_btn.setFixedHeight(Layout.BUTTON_HEIGHT)
         load_btn.clicked.connect(self.load_file)
         file_layout.addWidget(load_btn)
 
@@ -146,19 +146,19 @@ class OscilloscopeApp(QMainWindow):
         # Signal processor
         proc_section = self.create_section("SIGNAL PROCESSOR")
         proc_layout = QVBoxLayout()
-        proc_layout.setContentsMargins(10, 35, 10, 10)
+        proc_layout.setContentsMargins(6, 22, 6, 6)
 
         reverse_btn = QPushButton('⟲ REVERSE SIGNAL')
         reverse_btn.setObjectName("reverseButton")
-        reverse_btn.setFont(QFont('Courier New', 14, QFont.Bold))
-        reverse_btn.setFixedHeight(45)
+        reverse_btn.setFont(QFont('Courier New', 10, QFont.Bold))
+        reverse_btn.setFixedHeight(Layout.BUTTON_HEIGHT)
         reverse_btn.clicked.connect(self.reverse_audio)
         proc_layout.addWidget(reverse_btn)
 
         self.reverse_status = QLabel('⚫ STANDBY')
         self.reverse_status.setObjectName("reverseStatus")
         self.reverse_status.setAlignment(Qt.AlignCenter)
-        self.reverse_status.setFont(QFont('Courier New', 13, QFont.Bold))
+        self.reverse_status.setFont(QFont('Courier New', 9, QFont.Bold))
         proc_layout.addWidget(self.reverse_status)
 
         proc_section.setLayout(proc_layout)
@@ -167,7 +167,7 @@ class OscilloscopeApp(QMainWindow):
         # Signal parameters
         params_section = self.create_section("SIGNAL PARAMETERS")
         params_container = QVBoxLayout()
-        params_container.setContentsMargins(10, 35, 10, 10)
+        params_container.setContentsMargins(6, 22, 6, 6)
         params_layout = QGridLayout()
         params_layout.setSpacing(8)
 
@@ -192,12 +192,12 @@ class OscilloscopeApp(QMainWindow):
 
             label = QLabel(name)
             label.setObjectName("paramLabel")
-            label.setFont(QFont('Courier New', 10))
+            label.setFont(QFont('Courier New', 8))
             param_layout.addWidget(label)
 
             value = QLabel(f"{default} {unit}")
             value.setObjectName("paramValue")
-            value.setFont(QFont('Courier New', 16, QFont.Bold))
+            value.setFont(QFont('Courier New', 12, QFont.Bold))
             param_layout.addWidget(value)
 
             self.param_labels[name] = (value, unit)
@@ -210,28 +210,28 @@ class OscilloscopeApp(QMainWindow):
         # Playback
         play_section = self.create_section("PLAYBACK CONTROL")
         play_container = QVBoxLayout()
-        play_container.setContentsMargins(10, 35, 10, 10)
+        play_container.setContentsMargins(6, 22, 6, 6)
         play_layout = QGridLayout()
         play_layout.setSpacing(5)
 
         self.play_btn = QPushButton('▶ PLAY')
         self.play_btn.setObjectName("playButton")
-        self.play_btn.setFont(QFont('Courier New', 13, QFont.Bold))
-        self.play_btn.setFixedHeight(40)
+        self.play_btn.setFont(QFont('Courier New', 9, QFont.Bold))
+        self.play_btn.setFixedHeight(Layout.BUTTON_HEIGHT_SMALL)
         self.play_btn.clicked.connect(self.play_audio)
         play_layout.addWidget(self.play_btn, 0, 0)
 
         self.pause_btn = QPushButton('❚❚ PAUSE')
         self.pause_btn.setObjectName("playButton")
-        self.pause_btn.setFont(QFont('Courier New', 13, QFont.Bold))
-        self.pause_btn.setFixedHeight(40)
+        self.pause_btn.setFont(QFont('Courier New', 9, QFont.Bold))
+        self.pause_btn.setFixedHeight(Layout.BUTTON_HEIGHT_SMALL)
         self.pause_btn.clicked.connect(self.pause_audio)
         play_layout.addWidget(self.pause_btn, 0, 1)
 
         self.stop_btn = QPushButton('■ STOP')
         self.stop_btn.setObjectName("stopButton")
-        self.stop_btn.setFont(QFont('Courier New', 13, QFont.Bold))
-        self.stop_btn.setFixedHeight(40)
+        self.stop_btn.setFont(QFont('Courier New', 9, QFont.Bold))
+        self.stop_btn.setFixedHeight(Layout.BUTTON_HEIGHT_SMALL)
         self.stop_btn.clicked.connect(self.stop_audio)
         play_layout.addWidget(self.stop_btn, 1, 0, 1, 2)
 
@@ -242,26 +242,26 @@ class OscilloscopeApp(QMainWindow):
         # Timebase
         time_section = self.create_section("TIMEBASE CONTROL")
         time_layout = QVBoxLayout()
-        time_layout.setContentsMargins(10, 35, 10, 10)
+        time_layout.setContentsMargins(6, 22, 6, 6)
 
         speed_display = QFrame()
         speed_display.setObjectName("speedDisplay")
-        speed_display.setFixedHeight(70)
+        speed_display.setFixedHeight(Layout.SPEED_DISPLAY_HEIGHT)
         speed_layout = QVBoxLayout(speed_display)
 
         self.speed_label = QLabel('1.00x')
         self.speed_label.setObjectName("speedValue")
         self.speed_label.setAlignment(Qt.AlignCenter)
-        self.speed_label.setFont(QFont('Courier New', 28, QFont.Bold))
+        self.speed_label.setFont(QFont('Courier New', 18, QFont.Bold))
         speed_layout.addWidget(self.speed_label)
         time_layout.addWidget(speed_display)
 
         self.speed_slider = QSlider(Qt.Horizontal)
         self.speed_slider.setObjectName("speedSlider")
-        self.speed_slider.setMinimum(5)
-        self.speed_slider.setMaximum(20)
-        self.speed_slider.setValue(10)
-        self.speed_slider.setFixedHeight(30)
+        self.speed_slider.setMinimum(SPEED_MIN)
+        self.speed_slider.setMaximum(SPEED_MAX)
+        self.speed_slider.setValue(SPEED_DEFAULT)
+        self.speed_slider.setFixedHeight(Layout.SLIDER_HEIGHT)
         self.speed_slider.valueChanged.connect(self.on_speed_change)
         time_layout.addWidget(self.speed_slider)
 
@@ -285,28 +285,28 @@ class OscilloscopeApp(QMainWindow):
         panel = QFrame()
         panel.setObjectName("displayPanel")
         panel_layout = QVBoxLayout(panel)
-        panel_layout.setSpacing(10)
+        panel_layout.setSpacing(6)
 
         # CH1 - Waveform
         ch1_label = QLabel('CH1: TIME DOMAIN WAVEFORM')
         ch1_label.setObjectName("channelLabel")
         ch1_label.setAlignment(Qt.AlignCenter)
-        ch1_label.setFont(QFont('Courier New', 14, QFont.Bold))
+        ch1_label.setFont(QFont('Courier New', 10, QFont.Bold))
         panel_layout.addWidget(ch1_label)
 
-        self.waveform_canvas = MplCanvas(self, width=12, height=3.8)
-        self.style_scope_axis(self.waveform_canvas.axes, 'TIME (ms)', 'AMPLITUDE (V)')
+        self.waveform_canvas = MplCanvas(self, width=Layout.CANVAS_WIDTH, height=Layout.CANVAS_HEIGHT)
+        style_scope_axis(self.waveform_canvas.axes, 'TIME (ms)', 'AMPLITUDE (V)')
         panel_layout.addWidget(self.waveform_canvas)
 
         # CH2 - Spectrum
         ch2_label = QLabel('CH2: FREQUENCY DOMAIN SPECTRUM')
         ch2_label.setObjectName("channelLabel")
         ch2_label.setAlignment(Qt.AlignCenter)
-        ch2_label.setFont(QFont('Courier New', 14, QFont.Bold))
+        ch2_label.setFont(QFont('Courier New', 10, QFont.Bold))
         panel_layout.addWidget(ch2_label)
 
-        self.spectrum_canvas = MplCanvas(self, width=12, height=3.8)
-        self.style_scope_axis(self.spectrum_canvas.axes, 'FREQUENCY (Hz)', 'MAGNITUDE (dB)')
+        self.spectrum_canvas = MplCanvas(self, width=Layout.CANVAS_WIDTH, height=Layout.CANVAS_HEIGHT)
+        style_scope_axis(self.spectrum_canvas.axes, 'FREQUENCY (Hz)', 'MAGNITUDE (dB)')
         panel_layout.addWidget(self.spectrum_canvas)
 
         layout.addWidget(panel, stretch=1)
@@ -315,19 +315,19 @@ class OscilloscopeApp(QMainWindow):
         """Create status bar"""
         status = QFrame()
         status.setObjectName("statusBar")
-        status.setFixedHeight(40)
+        status.setFixedHeight(Layout.STATUS_BAR_HEIGHT)
         status_layout = QHBoxLayout(status)
 
         self.status_label = QLabel('⚫ SYSTEM READY')
         self.status_label.setObjectName("statusLabel")
-        self.status_label.setFont(QFont('Courier New', 12, QFont.Bold))
+        self.status_label.setFont(QFont('Courier New', 9, QFont.Bold))
         status_layout.addWidget(self.status_label)
 
         status_layout.addStretch()
 
         self.time_label = QLabel('00:00.000')
         self.time_label.setObjectName("timeLabel")
-        self.time_label.setFont(QFont('Courier New', 12, QFont.Bold))
+        self.time_label.setFont(QFont('Courier New', 10, QFont.Bold))
         status_layout.addWidget(self.time_label)
 
         layout.addWidget(status)
@@ -340,175 +340,20 @@ class OscilloscopeApp(QMainWindow):
         label = QLabel(f"═══ {title} ═══")
         label.setObjectName("sectionTitle")
         label.setAlignment(Qt.AlignCenter)
-        label.setFont(QFont('Courier New', 12, QFont.Bold))
+        label.setFont(QFont('Courier New', 10, QFont.Bold))
         label.setParent(section)
-        label.setGeometry(0, 0, 400, 30)
+        label.setGeometry(0, 0, Layout.SECTION_TITLE_WIDTH, Layout.SECTION_TITLE_HEIGHT)
 
         return section
 
-    def style_scope_axis(self, ax, xlabel, ylabel):
-        """Style matplotlib axis"""
-        for spine in ax.spines.values():
-            spine.set_visible(False)
-
-        ax.grid(True, which='major', color='#001a00', linewidth=1.5, alpha=0.8)
-        ax.grid(True, which='minor', color='#001a00', linewidth=0.5, alpha=0.4)
-        ax.minorticks_on()
-
-        ax.tick_params(colors='#00aa00', which='both', labelsize=9)
-        ax.set_xlabel(xlabel, color='#00aa00', fontsize=10, weight='bold')
-        ax.set_ylabel(ylabel, color='#00aa00', fontsize=10, weight='bold')
-
-        rect = patches.Rectangle(
-            (0, 0), 1, 1,
-            transform=ax.transAxes,
-            fill=False,
-            edgecolor='#001a00',
-            linewidth=2
-        )
-        ax.add_patch(rect)
-
     def apply_stylesheet(self):
-        """Apply QSS stylesheet"""
-        stylesheet = """
-        QMainWindow {
-            background-color: #000000;
-        }
+        """Apply QSS stylesheet from config"""
+        self.setStyleSheet(get_stylesheet())
 
-        #header {
-            background-color: #000000;
-            border: 2px solid #001a00;
-        }
-
-        #title {
-            color: #00ff41;
-        }
-
-        #subtitle {
-            color: #00aa00;
-        }
-
-        #controlPanel {
-            background-color: #0a0a0a;
-            border: 2px solid #001a00;
-        }
-
-        #displayPanel {
-            background-color: #000000;
-            border: 2px solid #001a00;
-        }
-
-        #section {
-            background-color: #0a0a0a;
-            border: 2px solid #001a00;
-            border-radius: 5px;
-        }
-
-        #sectionTitle {
-            color: #00ff41;
-        }
-
-        #fileLabel, #reverseStatus {
-            color: #00aa00;
-        }
-
-        QPushButton {
-            background-color: #003300;
-            color: #00ff41;
-            border: 2px solid #00ff41;
-            border-radius: 5px;
-            padding: 8px;
-        }
-
-        QPushButton:hover {
-            background-color: #00ff41;
-            color: #000000;
-        }
-
-        #reverseButton {
-            border-color: #ffff00;
-            color: #ffff00;
-        }
-
-        #reverseButton:hover {
-            background-color: #ffff00;
-        }
-
-        #stopButton {
-            border-color: #ff0000;
-            color: #ff0000;
-        }
-
-        #stopButton:hover {
-            background-color: #ff0000;
-        }
-
-        #parameterBox {
-            background-color: #000000;
-            border: 2px solid #001a00;
-            border-radius: 3px;
-        }
-
-        #paramLabel {
-            color: #00aa00;
-        }
-
-        #paramValue {
-            color: #00ff41;
-        }
-
-        #speedDisplay {
-            background-color: #000000;
-            border: 3px solid #001a00;
-            border-radius: 5px;
-        }
-
-        #speedValue {
-            color: #00ff41;
-        }
-
-        #speedMarker {
-            color: #00aa00;
-        }
-
-        QSlider::groove:horizontal {
-            background: #001a00;
-            height: 8px;
-            border-radius: 4px;
-        }
-
-        QSlider::handle:horizontal {
-            background: #00ff41;
-            width: 20px;
-            margin: -6px 0;
-            border-radius: 10px;
-        }
-
-        QSlider::add-page:horizontal {
-            background: #001a00;
-        }
-
-        QSlider::sub-page:horizontal {
-            background: #00ff41;
-        }
-
-        #channelLabel {
-            color: #00ff41;
-        }
-
-        #statusBar {
-            background-color: #0a0a0a;
-            border: 2px solid #001a00;
-        }
-
-        #statusLabel, #timeLabel {
-            color: #00ff41;
-        }
-        """
-        self.setStyleSheet(stylesheet)
-
-    def update_status(self, message, color='#00ff41'):
+    def update_status(self, message, color=None):
         """Update status"""
+        if color is None:
+            color = Colors.GREEN_BRIGHT
         self.status_label.setText(f'● {message}')
         self.status_label.setStyleSheet(f'color: {color};')
 
@@ -523,12 +368,12 @@ class OscilloscopeApp(QMainWindow):
 
         if file_path:
             try:
-                self.update_status("LOADING SIGNAL...", '#ffff00')
+                self.update_status("LOADING SIGNAL...", Colors.YELLOW)
                 self.processor.load_audio(file_path)
 
                 filename = os.path.basename(file_path)
                 self.file_label.setText(filename)
-                self.file_label.setStyleSheet('color: #00ff41;')
+                self.file_label.setStyleSheet(f'color: {Colors.GREEN_BRIGHT};')
                 self.update_status("SIGNAL ACQUIRED")
 
                 self.update_parameters()
@@ -536,34 +381,34 @@ class OscilloscopeApp(QMainWindow):
                 self.draw_spectrum()
 
             except FileNotFoundError:
-                self.update_status("ERROR: FILE NOT FOUND", '#ff0000')
+                self.update_status("ERROR: FILE NOT FOUND", Colors.RED)
                 self.file_label.setText("FILE NOT FOUND")
-                self.file_label.setStyleSheet('color: #ff0000;')
+                self.file_label.setStyleSheet(f'color: {Colors.RED};')
             except Exception as e:
                 error_msg = str(e)
                 # ffmpeg 관련 에러 체크
                 if 'ffmpeg' in error_msg.lower() or 'ffprobe' in error_msg.lower():
-                    self.update_status("ERROR: FFMPEG NOT FOUND", '#ff0000')
+                    self.update_status("ERROR: FFMPEG NOT FOUND", Colors.RED)
                     self.file_label.setText("INSTALL FFMPEG")
                 elif 'codec' in error_msg.lower() or 'decode' in error_msg.lower():
-                    self.update_status("ERROR: UNSUPPORTED CODEC", '#ff0000')
+                    self.update_status("ERROR: UNSUPPORTED CODEC", Colors.RED)
                     self.file_label.setText("CODEC ERROR")
                 else:
-                    self.update_status(f"ERROR: {error_msg[:30]}", '#ff0000')
+                    self.update_status(f"ERROR: {error_msg[:30]}", Colors.RED)
                     self.file_label.setText("LOAD FAILED")
-                self.file_label.setStyleSheet('color: #ff0000;')
+                self.file_label.setStyleSheet(f'color: {Colors.RED};')
                 print(f"Load error details: {e}")  # Console debug
 
     def reverse_audio(self):
         """Reverse audio"""
         if self.processor.audio is None:
-            self.update_status("ERROR: NO SIGNAL", '#ff0000')
+            self.update_status("ERROR: NO SIGNAL", Colors.RED)
             return
 
         try:
-            self.update_status("PROCESSING...", '#ffff00')
+            self.update_status("PROCESSING...", Colors.YELLOW)
             self.reverse_status.setText('⚫ PROCESSING')
-            self.reverse_status.setStyleSheet('color: #ffff00;')
+            self.reverse_status.setStyleSheet(f'color: {Colors.YELLOW};')
 
             def reverse_thread():
                 self.processor.reverse_audio()
@@ -573,25 +418,24 @@ class OscilloscopeApp(QMainWindow):
             thread.start()
 
         except Exception as e:
-            self.update_status(f"ERROR: {str(e)}", '#ff0000')
+            self.update_status(f"ERROR: {str(e)}", Colors.RED)
             self.reverse_status.setText('⚫ FAILED')
-            self.reverse_status.setStyleSheet('color: #ff0000;')
+            self.reverse_status.setStyleSheet(f'color: {Colors.RED};')
 
     def on_reverse_complete(self):
         """Reverse complete"""
         self.reverse_status.setText('● REVERSED')
-        self.reverse_status.setStyleSheet('color: #00ff41;')
+        self.reverse_status.setStyleSheet(f'color: {Colors.GREEN_BRIGHT};')
         self.update_status("SIGNAL REVERSED")
         # Invalidate animation cache (audio data changed)
-        self._waveform_background = None
-        self._cached_samples = None
+        self.waveform_animator.invalidate_cache()
         self.draw_waveform()
         self.draw_spectrum()
 
     def play_audio(self):
         """Play audio"""
         if self.processor.reversed_audio is None:
-            self.update_status("ERROR: NO REVERSED SIGNAL", '#ff0000')
+            self.update_status("ERROR: NO REVERSED SIGNAL", Colors.RED)
             return
 
         try:
@@ -623,7 +467,7 @@ class OscilloscopeApp(QMainWindow):
                 self.update_status(f"PLAYING @ {self.current_speed:.2f}x")
 
         except Exception as e:
-            self.update_status(f"ERROR: {str(e)}", '#ff0000')
+            self.update_status(f"ERROR: {str(e)}", Colors.RED)
 
     def pause_audio(self):
         """Pause"""
@@ -631,7 +475,7 @@ class OscilloscopeApp(QMainWindow):
             pygame.mixer.music.pause()
             self.is_paused = True
             self.animation_timer.stop()
-            self.update_status("PAUSED", '#ffff00')
+            self.update_status("PAUSED", Colors.YELLOW)
 
     def stop_audio(self):
         """Stop"""
@@ -641,11 +485,10 @@ class OscilloscopeApp(QMainWindow):
         self.animation_timer.stop()
         self.playback_position = 0
         # Invalidate animation cache
-        self._waveform_background = None
-        self._cached_samples = None
+        self.waveform_animator.invalidate_cache()
         self.draw_waveform()
         self.draw_spectrum()
-        self.update_status("STOPPED", '#ff0000')
+        self.update_status("STOPPED", Colors.RED)
 
     def on_speed_change(self, value):
         """Speed change"""
@@ -668,7 +511,7 @@ class OscilloscopeApp(QMainWindow):
 
         # Just increment position for visual effect
         duration_ms = self.processor.duration_ms if self.processor.duration_ms else 1000
-        self.playback_position += 100  # Move by 100ms each update
+        self.playback_position += PLAYBACK_STEP_MS
 
         if self.playback_position >= duration_ms:
             self.playback_position = 0  # Loop back
@@ -693,186 +536,41 @@ class OscilloscopeApp(QMainWindow):
             self.param_labels['FMT'][0].setText(f"{metadata['format']} {self.param_labels['FMT'][1]}")
 
     def draw_waveform(self):
-        """Draw waveform"""
-        self.waveform_canvas.axes.clear()
-
+        """Draw waveform using visualization module"""
         audio_data = self.processor.get_audio_data()
-        if audio_data is None:
-            self.style_scope_axis(self.waveform_canvas.axes, 'TIME (ms)', 'AMPLITUDE (V)')
-            self.waveform_canvas.axes.text(
-                0.5, 0.5, 'NO SIGNAL',
-                ha='center', va='center',
-                transform=self.waveform_canvas.axes.transAxes,
-                color='#00aa00', fontsize=18, weight='bold'
-            )
-            self.waveform_canvas.draw()
-            return
-
-        if len(audio_data.shape) > 1:
-            samples = audio_data[:, 0]
-        else:
-            samples = audio_data
-
-        display_samples = 4000
-        if len(samples) > display_samples:
-            step = len(samples) // display_samples
-            samples = samples[::step]
-
-        samples = samples / (np.max(np.abs(samples)) + 1e-10)
-
-        duration_ms = self.processor.duration_ms
-        time_ms = np.linspace(0, duration_ms, len(samples))
-
-        # Single line (optimized from 3-layer glow)
-        self.waveform_canvas.axes.plot(time_ms, samples, color='#00ff41', linewidth=1.5, alpha=0.9)
-
-        self.waveform_canvas.axes.set_xlim(0, duration_ms)
-        self.waveform_canvas.axes.set_ylim(-1.2, 1.2)
-        self.style_scope_axis(self.waveform_canvas.axes, 'TIME (ms)', 'AMPLITUDE (V)')
-
-        self.waveform_canvas.axes.axhline(y=0, color='#001a00', linewidth=1.5, alpha=0.8)
-
-        # Add playback position marker
-        if self.is_playing and self.playback_position > 0:
-            self.waveform_canvas.axes.axvline(
-                x=self.playback_position,
-                color='#ffff00',
-                linewidth=2,
-                alpha=0.8,
-                linestyle='--'
-            )
-            # Add position label
-            self.waveform_canvas.axes.text(
-                self.playback_position,
-                1.1,
-                f'{self.playback_position:.0f}ms',
-                color='#ffff00',
-                fontsize=9,
-                ha='center',
-                weight='bold'
-            )
-
-        self.waveform_canvas.draw()
-
-    def _prepare_animation_cache(self):
-        """Prepare cached data for blitting animation"""
-        audio_data = self.processor.get_audio_data()
-        if audio_data is None:
-            return False
-
-        # Get and cache samples
-        if len(audio_data.shape) > 1:
-            samples = audio_data[:, 0]
-        else:
-            samples = audio_data
-
-        # Downsample
-        display_samples = 4000
-        if len(samples) > display_samples:
-            step = len(samples) // display_samples
-            samples = samples[::step]
-
-        # Normalize and cache
-        self._cached_samples = samples / (np.max(np.abs(samples)) + 1e-10)
-
-        # Setup static background
-        ax = self.waveform_canvas.axes
-        ax.clear()
-        ax.set_xlim(0, 2000)  # 2 second window
-        ax.set_ylim(-1.2, 1.2)
-        self.style_scope_axis(ax, 'TIME (ms)', 'AMPLITUDE (V)')
-        ax.axhline(y=0, color='#001a00', linewidth=1.5, alpha=0.8)
-
-        # Create empty line for animation
-        self._waveform_line, = ax.plot([], [], color='#00ff41', linewidth=1.5, alpha=0.9)
-        self._waveform_marker = ax.axvline(x=600, color='#ffff00', linewidth=2, alpha=0.5, linestyle='--')
-
-        # Draw and cache background
-        self.waveform_canvas.draw()
-        self._waveform_background = self.waveform_canvas.copy_from_bbox(ax.bbox)
-
-        return True
+        samples = prepare_waveform_samples(audio_data, self.processor.channels)
+        draw_waveform_static(
+            self.waveform_canvas,
+            samples,
+            self.processor.duration_ms,
+            self.playback_position,
+            self.is_playing
+        )
 
     def draw_waveform_animated(self):
-        """Draw waveform with blitting for high performance"""
-        # Initialize cache if needed
-        if self._waveform_background is None or self._cached_samples is None:
-            if not self._prepare_animation_cache():
+        """Draw waveform with blitting using WaveformAnimator"""
+        # Initialize animator cache if needed
+        if self.waveform_animator._background is None:
+            audio_data = self.processor.get_audio_data()
+            if not self.waveform_animator.prepare_cache(audio_data):
                 return
 
-        ax = self.waveform_canvas.axes
-        duration_ms = self.processor.duration_ms
-        total_points = len(self._cached_samples)
-        window_size_ms = 2000  # 2 second window
-        window_size_points = int((window_size_ms / duration_ms) * total_points)
-
-        # Calculate window position
-        start_point = int((self.playback_position / duration_ms) * total_points)
-        if start_point >= total_points:
-            start_point = 0
-        end_point = min(start_point + window_size_points, total_points)
-
-        # Get window samples
-        window_samples = self._cached_samples[start_point:end_point]
-        if len(window_samples) == 0:
-            window_samples = self._cached_samples[:window_size_points]
-
-        time_window = np.linspace(0, window_size_ms, len(window_samples))
-
-        # Restore background and update line (blitting)
-        self.waveform_canvas.restore_region(self._waveform_background)
-        self._waveform_line.set_data(time_window, window_samples)
-        ax.draw_artist(self._waveform_line)
-        ax.draw_artist(self._waveform_marker)
-        self.waveform_canvas.blit(ax.bbox)
+        # Update animation frame
+        self.waveform_animator.update(
+            self.playback_position,
+            self.processor.duration_ms
+        )
 
     def draw_spectrum(self):
-        """Draw spectrum"""
-        self.spectrum_canvas.axes.clear()
-
+        """Draw spectrum using visualization module"""
         audio_data = self.processor.get_audio_data()
-        if audio_data is None:
-            self.style_scope_axis(self.spectrum_canvas.axes, 'FREQUENCY (Hz)', 'MAGNITUDE (dB)')
-            self.spectrum_canvas.axes.text(
-                0.5, 0.5, 'NO SIGNAL',
-                ha='center', va='center',
-                transform=self.spectrum_canvas.axes.transAxes,
-                color='#00aa00', fontsize=18, weight='bold'
-            )
-            self.spectrum_canvas.draw()
-            return
-
-        if len(audio_data.shape) > 1:
-            samples = audio_data[:, 0]
-        else:
-            samples = audio_data
-
-        fft_size = min(16384, len(samples))
-        chunk = samples[:fft_size]
-
-        fft = np.fft.fft(chunk)
-        freqs = np.fft.fftfreq(len(chunk), 1.0 / self.processor.sample_rate)
-
-        positive_freqs = freqs[:len(freqs)//2]
-        magnitude = np.abs(fft[:len(fft)//2])
-
-        magnitude_db = 20 * np.log10(magnitude + 1e-10)
-        magnitude_db = magnitude_db - np.min(magnitude_db)
-
-        window_size = 51
-        if len(magnitude_db) > window_size:
-            magnitude_db = signal.savgol_filter(magnitude_db, window_size, 3)
-
-        # Single line (optimized from 3-layer glow)
-        self.spectrum_canvas.axes.plot(positive_freqs, magnitude_db, color='#00ff41', linewidth=1.5, alpha=0.9)
-
-        self.spectrum_canvas.axes.fill_between(positive_freqs, magnitude_db, 0, color='#00ff41', alpha=0.2)
-
-        self.spectrum_canvas.axes.set_xlim(20, self.processor.sample_rate/2)
-        self.spectrum_canvas.axes.set_xscale('log')
-        self.style_scope_axis(self.spectrum_canvas.axes, 'FREQUENCY (Hz)', 'MAGNITUDE (dB)')
-
-        self.spectrum_canvas.draw()
+        frequencies, magnitude_db = compute_spectrum(audio_data, self.processor.sample_rate)
+        draw_spectrum_static(
+            self.spectrum_canvas,
+            frequencies,
+            magnitude_db,
+            self.processor.sample_rate
+        )
 
     def closeEvent(self, event):
         """Cleanup on close"""

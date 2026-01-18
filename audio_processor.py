@@ -6,7 +6,6 @@ Handles audio file loading, reversing, and format conversion
 import os
 import tempfile
 from pydub import AudioSegment
-from pydub.playback import play
 import numpy as np
 
 
