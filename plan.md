@@ -2,53 +2,31 @@
 
 ## 완료된 작업 (2026-01-18)
 
+### 성능 최적화
 - [x] scipy.signal import 최적화 (600ms → 0.3ms/frame)
 - [x] glow effect 3중 렌더링 → 단일 라인
 - [x] Matplotlib blitting 적용 (5x 성능 향상)
 - [x] 애니메이션 인터벌 50ms → 100ms
+
+### 코드 품질
 - [x] bare except → OSError 명시적 예외 처리
 - [x] tempfile import 파일 상단 이동
 - [x] 오디오 로드 에러 메시지 상세화
+- [x] 디버그 print문 제거
+
+### 구조 개선
+- [x] **설정 파일 분리** (`config.py`)
+- [x] **시각화 코드 분리** (`visualization.py`)
+- [x] **qt_scope.py 리팩토링**
+
+### UI 개선
+- [x] **UI 크기 70% 증가** (960x570 → 1632x969)
+- [x] **배속 컨트롤 제거** (TIMEBASE CONTROL 섹션)
+- [x] **미사용 코드 정리** (SPEED_* 상수, 스타일시트 -46 lines)
+
+---
 
 ## 남은 작업
-
-### 🟢 Low Priority - 코드 정리 ✅ 완료
-
-- [x] **Constants 추출**
-  - Magic numbers를 상수로 정리
-  - `DISPLAY_SAMPLES = 4000`
-  - `WINDOW_SIZE_MS = 2000`
-  - `ANIMATION_INTERVAL_MS = 100`
-  - `PLAYBACK_STEP_MS = 100`
-  - `FFT_SIZE = 16384`
-  - `SAVGOL_WINDOW = 51`
-  - `SPEED_MIN/MAX/DEFAULT = 5/20/10`
-
-- [x] **미사용 import 제거**
-  - `audio_processor.py` - `pydub.playback.play` 제거됨
-
-### 🟡 Medium Priority - 구조 개선 ✅ 완료
-
-- [x] **설정 파일 분리** (`config.py`)
-  - `Colors` 클래스 (GREEN_BRIGHT, YELLOW, RED 등)
-  - `Fonts` 클래스 (TITLE_FAMILY, MONO_FAMILY 등)
-  - `Layout` 클래스 (WINDOW_WIDTH, CONTROL_PANEL_WIDTH 등)
-  - `get_stylesheet()` 함수 - QSS 동적 생성
-  - Display/Animation/FFT 상수 통합
-
-- [x] **시각화 코드 분리** (`visualization.py`)
-  - `MplCanvas` 클래스
-  - `style_scope_axis()` - 오실로스코프 스타일 축
-  - `prepare_waveform_samples()` - 파형 샘플 준비
-  - `compute_spectrum()` - FFT 스펙트럼 계산
-  - `draw_waveform_static()` / `draw_spectrum_static()` - 정적 렌더링
-  - `WaveformAnimator` 클래스 - 블리팅 애니메이션
-
-- [x] **qt_scope.py 리팩토링**
-  - config/visualization 모듈 import
-  - Colors 상수 사용 (하드코딩 색상 제거)
-  - numpy import 제거 (visualization으로 이동)
-  - WaveformAnimator 통합
 
 ### 🔵 Optional - 기능 추가
 
@@ -70,6 +48,14 @@
   - `tests/test_audio_processor.py`
   - load_audio, reverse_audio, change_speed 테스트
 
+### 🔧 Infrastructure
+
+- [ ] **pyproject.toml 도입**
+  - requirements.txt → pyproject.toml 마이그레이션
+  - 현대적 의존성 관리
+
+---
+
 ## 성능 벤치마크 결과
 
 | 항목 | 개선 전 | 개선 후 | 개선율 |
@@ -78,11 +64,14 @@
 | Animation render | 13.8ms/frame | 2.7ms/frame | 5.1x |
 | Glow effect | 3 draw calls | 1 draw call | 3x |
 
-## 아키텍처 점수
+---
 
-| 항목 | 점수 | 목표 |
-|------|------|------|
-| Quality | 75/100 | 85/100 |
-| Security | 85/100 | 90/100 |
-| Performance | 90/100 | 95/100 |
-| Architecture | 70/100 | 80/100 |
+## 아키텍처 점수 (2026-01-18 분석)
+
+| 항목 | 현재 | 이전 | 목표 |
+|------|------|------|------|
+| Quality | 80/100 | 75 | 85 |
+| Security | 90/100 | 85 | 90 ✅ |
+| Performance | 90/100 | 90 | 95 |
+| Architecture | 75/100 | 70 | 80 |
+| **종합** | **84/100** | 80 | 88 |
