@@ -22,18 +22,20 @@ class AudioProcessor:
         self.bitrate = None
 
     def load_audio(self, file_path):
-        """Load audio file (MP3 or WAV)"""
+        """Load audio file (M4A, MP3, WAV)"""
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
 
         file_ext = os.path.splitext(file_path)[1].lower()
 
-        if file_ext == '.mp3':
+        if file_ext == '.m4a':
+            self.audio = AudioSegment.from_file(file_path, format='m4a')
+        elif file_ext == '.mp3':
             self.audio = AudioSegment.from_mp3(file_path)
         elif file_ext == '.wav':
             self.audio = AudioSegment.from_wav(file_path)
         else:
-            raise ValueError("Unsupported file format. Only MP3 and WAV are supported.")
+            raise ValueError("Unsupported file format. Only M4A, MP3, and WAV are supported.")
 
         self.file_path = file_path
         self.sample_rate = self.audio.frame_rate

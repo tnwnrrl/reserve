@@ -510,7 +510,7 @@ class OscilloscopeApp(QMainWindow):
             self,
             "SELECT AUDIO FILE",
             "",
-            "Audio Files (*.mp3 *.wav);;MP3 Files (*.mp3);;WAV Files (*.wav)"
+            "Audio Files (*.m4a *.mp3 *.wav);;M4A Files (*.m4a);;MP3 Files (*.mp3);;WAV Files (*.wav)"
         )
 
         if file_path:
